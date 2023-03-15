@@ -2,6 +2,7 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+
 use crossbeam::channel;
 use std::fs::File;
 use std::io::prelude::*;
@@ -523,10 +524,13 @@ async fn send_message(message: String, conv_id: Uuid) -> Result<(), warp::error:
     let (tx, rx) = oneshot::channel::<Result<(), warp::error::Error>>();
     let vec_string_message: Vec<String> =
         message.split("something").map(|s| s.to_string()).collect();
+
+    let files_to_upload: Vec<PathBuf> = Vec::new();
     warp_cmd_tx
         .send(WarpCmd::RayGun(RayGunCmd::SendMessage {
             rsp: tx,
             conv_id: conv_id,
+            attachments: files_to_upload,
             msg: vec_string_message,
         }))
         .expect("main failed to send warp command");

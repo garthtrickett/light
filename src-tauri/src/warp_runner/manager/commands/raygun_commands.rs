@@ -9,6 +9,8 @@ use warp::{
     raygun::{self, ConversationType, ReactionState},
 };
 
+use std::path::PathBuf;
+
 use crate::{
     state::{self, chats},
     warp_runner::{conv_stream, ui_adapter::conversation_to_chat, Account, Messaging},
@@ -35,6 +37,7 @@ pub enum RayGunCmd {
     SendMessage {
         conv_id: Uuid,
         msg: Vec<String>,
+        attachments: Vec<PathBuf>,
         rsp: oneshot::Sender<Result<(), warp::error::Error>>,
     },
     // removes all direct conversations involving the recipient
@@ -93,8 +96,18 @@ pub async fn handle_raygun_cmd(
             };
             let _ = rsp.send(r);
         }
-        RayGunCmd::SendMessage { conv_id, msg, rsp } => {
-            let r = messaging.send(conv_id, None, msg).await;
+        RayGunCmd::SendMessage {
+            conv_id,
+            msg,
+            attachments,
+            rsp,
+        } => {
+            let r = if attachments.is_empty() {
+                messaging.send(conv_id, msg).await
+            } else {
+                messaging.attach(conv_id, attachments, msg).await
+            };
+
             let _ = rsp.send(r);
         }
         RayGunCmd::RemoveDirectConvs { recipient, rsp } => {

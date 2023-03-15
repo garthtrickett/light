@@ -314,17 +314,31 @@ async fn warp_initialization(
         .await
         .map(|mp| Box::new(mp) as Account)?;
 
-    let storage = warp_fs_ipfs::IpfsFileSystem::<warp_fs_ipfs::Persistent>::new(
-        account.clone(),
-        Some(FsIpfsConfig::production(path)),
-    )
-    .await
-    .map(|ct| Box::new(ct) as Storage)?;
+    // let storage = warp_fs_ipfs::IpfsFileSystem::<warp_fs_ipfs::Persistent>::new(
+    //     account.clone(),
+    //     Some(FsIpfsConfig::production(path)),
+    // )
+    // .await
+    // .map(|ct| Box::new(ct) as Storage)?;
+
+    let storage =
+        warp_fs_ipfs::IpfsFileSystem::new(account.clone(), Some(FsIpfsConfig::production(path)))
+            .await
+            .map(|ct| Box::new(ct) as Storage)?;
 
     // FYI: setting `rg_config.store_setting.disable_sender_event_emit` to `true` will prevent broadcasting `ConversationCreated` on the sender side
     let rg_config = RgIpfsConfig::production(path);
 
-    let messaging = warp_rg_ipfs::IpfsMessaging::<warp_mp_ipfs::Persistent>::new(
+    // let messaging = warp_rg_ipfs::IpfsMessaging::<warp_mp_ipfs::Persistent>::new(
+    //     Some(rg_config),
+    //     account.clone(),
+    //     Some(storage.clone()),
+    //     None,
+    // )
+    // .await
+    // .map(|rg| Box::new(rg) as Messaging)?;
+
+    let messaging = warp_rg_ipfs::IpfsMessaging::new(
         Some(rg_config),
         account.clone(),
         Some(storage.clone()),
