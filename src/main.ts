@@ -13,10 +13,12 @@ import "https://esm.sh/@material/web/button/filled-button.js";
 import "https://esm.sh/@material/web/textfield/filled-text-field.js";
 var view = "";
 
+import copy from 'copy-to-clipboard';
+
 
 
 // listen backend-ping event
-listen("warp-event", function (evt: TauriEvent<any>) {
+listen("warp-event", function(evt: TauriEvent<any>) {
   load_from_state(evt.payload, view);
 });
 
@@ -38,11 +40,11 @@ function state_tuple_to_array(state_tuple) {
 }
 
 let promise_start_sam = invoke("start_sam_command");
-promise_start_sam.then(function (result) {
+promise_start_sam.then(function(result) {
 });
 
 let promise_check_for_identity = invoke("check_for_identity_command");
-promise_check_for_identity.then(function (result) {
+promise_check_for_identity.then(function(result) {
   load_from_state(result, view);
 });
 
@@ -56,9 +58,9 @@ promise_check_for_identity.then(function (result) {
 
 function get_own_did_key() {
   let promise_start_sam = invoke("get_own_did_key_command");
-  promise_start_sam.then(function (result) {
-    alert(result);
-    navigator.clipboard.writeText(result);
+  promise_start_sam.then(function(result) {
+    // navigator.clipboard.writeText(result);
+    copy(result);
   });
 }
 
@@ -66,7 +68,7 @@ function send_login_request(password) {
   let promise_try_login = invoke("login_command", {
     password: password,
   });
-  promise_try_login.then(function (result) {
+  promise_try_login.then(function(result) {
     load_from_state(result, view);
   });
 }
@@ -75,7 +77,7 @@ function send_friend_request(did_key) {
   let promise = invoke("send_friend_request_command", {
     didKey: did_key,
   });
-  promise.then(function (result) {
+  promise.then(function(result) {
     load_from_state(result, view);
   });
 }
@@ -84,7 +86,7 @@ function send_message(conv_id, message) {
     convId: conv_id,
     message: message,
   });
-  promise.then(function (result) {
+  promise.then(function(result) {
     load_from_state(result, view);
   });
 }
@@ -95,7 +97,7 @@ function send_initial_message(did_key, message) {
     didKey: did_key,
     message: message,
   });
-  promise.then(function (result) {
+  promise.then(function(result) {
     load_from_state(result, view);
   });
 }
@@ -105,14 +107,14 @@ function create_identity(username, password) {
     username: username,
     password: password,
   });
-  promise_create_identity.then(function (result) {
+  promise_create_identity.then(function(result) {
     load_from_state(result, view);
   });
 }
 
 function delete_identity() {
   let promise_start_sam = invoke("delete_identity_command", {});
-  promise_start_sam.then(function (result) {
+  promise_start_sam.then(function(result) {
     load_from_state(result, view);
   });
 }
@@ -137,7 +139,7 @@ function friends_list_from_state(state, friend_type) {
       var button = html`<md-filled-button
                     label="Accept Request"
                     @click=${() =>
-        send_friend_request(friend_values["identity"]["did_key"])}>
+          send_friend_request(friend_values["identity"]["did_key"])}>
               />`;
     } else {
       var button = html``;
@@ -212,9 +214,9 @@ function load_from_state(state, view) {
       <div>
                              <md-filled-text-field
                               @change=${(e) => {
-          send_friend_request(e.srcElement.value);
-          e.srcElement.value = "Friend request failed";
-        }}
+            send_friend_request(e.srcElement.value);
+            e.srcElement.value = "Friend request failed";
+          }}
                               placeholder="Enter did_key to add contact" autofocus />
       </div>    
       <br>
@@ -241,7 +243,7 @@ function load_from_state(state, view) {
         <md-filled-button
                                         label="Back"
                                         @click=${() =>
-          load_from_state(state, "")}>
+            load_from_state(state, "")}>
                                   />`;
         if (chat_with_this_did_key_exists == true) {
           // TODO - put in a way to send messages after initial message
@@ -257,17 +259,15 @@ function load_from_state(state, view) {
           
                                   ${back_button}
           
-      ${
-            map(chat["messages"], (message) =>
-              html`<div>${chat_participants[message["sender"]]}: ${
-                message["value"]["0"]
+      ${map(chat["messages"], (message) =>
+            html`<div>${chat_participants[message["sender"]]}: ${message["value"]["0"]
               }</div>`)
-          }
+            }
                              <md-filled-text-field
                               @change=${(e) => {
-            send_message(e.srcElement.value, chat["id"]);
-            e.srcElement.value = "";
-          }}
+              send_message(e.srcElement.value, chat["id"]);
+              e.srcElement.value = "";
+            }}
                               placeholder="Send message" autofocus />
                           
                                 <div>`;
@@ -276,9 +276,9 @@ function load_from_state(state, view) {
 
                              <md-filled-text-field
                               @change=${(e) => {
-            send_initial_message(view, e.srcElement.value);
-            e.srcElement.value = "";
-          }}
+              send_initial_message(view, e.srcElement.value);
+              e.srcElement.value = "";
+            }}
                               placeholder="Send first message" autofocus />
                                      
                                 `;
@@ -291,9 +291,9 @@ function load_from_state(state, view) {
                            You need to log in
                              <md-filled-text-field
                               @change=${(e) => {
-        send_login_request(e.srcElement.value);
-        e.srcElement.value = "Password Wrong";
-      }}
+          send_login_request(e.srcElement.value);
+          e.srcElement.value = "Password Wrong";
+        }}
                               placeholder="Enter Password" autofocus />
                           </div>`;
       var conditional_child = login_div;

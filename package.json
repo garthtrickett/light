@@ -10,7 +10,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^1.2.0"
+    "@tauri-apps/api": "^1.2.0",
+    "copy-to-clipboard": "^3.3.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^1.2.2",
