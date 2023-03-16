@@ -1,8 +1,10 @@
+// use crate::icons::outline::Shape as Icon;
 use dioxus_desktop::{tao::window::WindowId, DesktopContext};
-// use kit::icons::Icon;
+// use extensions::ExtensionProxy;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, rc::Weak};
 use uuid::Uuid;
+use wry::webview::WebView;
 
 use super::notifications::Notifications;
 
@@ -16,7 +18,22 @@ pub struct WindowMeta {
     pub minimal_view: bool, // We can use this to detect mobile or portrait mode
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub enum Layout {
+    Welcome,
+    Compose,
+    Friends,
+    Settings,
+    Storage,
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self::Welcome
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
 pub struct UI {
     pub notifications: Notifications,
     // stores information related to the current call
@@ -34,10 +51,25 @@ pub struct UI {
     pub enable_overlay: bool,
     pub sidebar_hidden: bool,
     pub metadata: WindowMeta,
+    #[serde(skip)]
+    pub current_layout: Layout,
+    // overlays or other windows are created via DesktopContext::new_window. they are stored here so they can be closed later.
+    // #[serde(skip)]
+    // pub overlays: Vec<Weak<WebView>>,
+    // #[serde(skip)]
+    // pub extensions: HashMap<String, ExtensionProxy>,
+    #[serde(default = "bool_true")]
+    pub show_settings_welcome: bool,
+}
+
+fn bool_true() -> bool {
+    true
 }
 
 impl Drop for UI {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.clear_overlays();
+    }
 }
 
 impl UI {
@@ -88,6 +120,37 @@ impl UI {
         if let Some(id) = self.take_debug_logger_id() {
             desktop_context.close_window(id);
         };
+    }
+    pub fn clear_overlays(&mut self) {
+        // for overlay in &self.overlays {
+        //     if let Some(window) = Weak::upgrade(overlay) {
+        //         window
+        //             .evaluate_script("close()")
+        //             .expect("failed to close webview");
+        //     }
+        // }
+        // self.overlays.clear();
+    }
+    pub fn remove_overlay(&mut self, id: WindowId) {
+        // let to_keep: Vec<Weak<WebView>> = self
+        //     .overlays
+        //     .iter()
+        //     .filter(|x| match Weak::upgrade(x) {
+        //         None => false,
+        //         Some(window) => {
+        //             if window.window().id() == id {
+        //                 window
+        //                     .evaluate_script("close()")
+        //                     .expect("failed to close webview");
+        //                 false
+        //             } else {
+        //                 true
+        //             }
+        //         }
+        //     })
+        //     .cloned()
+        //     .collect();
+        // self.overlays = to_keep;
     }
 
     pub fn toggle_muted(&mut self) {
@@ -153,18 +216,15 @@ impl DebugLogger {
 pub struct ToastNotification {
     pub title: String,
     pub content: String,
-    #[serde(skip)]
-    // pub icon: Option<bool>,
     initial_time: u32,
     remaining_time: u32,
 }
 
 impl ToastNotification {
-    pub fn init(title: String, content: String, icon: Option<bool>, timeout: u32) -> Self {
+    pub fn init(title: String, content: String, timeout: u32) -> Self {
         Self {
             title,
             content,
-            // icon,
             initial_time: timeout,
             remaining_time: timeout,
         }

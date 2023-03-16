@@ -6,12 +6,8 @@ use tokio::sync::{
     Mutex, Notify,
 };
 use warp::{
-    constellation::Constellation,
-    error::Error,
-    logging::tracing::log,
-    multipass::{self, MultiPass},
-    raygun::RayGun,
-    tesseract::Tesseract,
+    constellation::Constellation, error::Error, logging::tracing::log, multipass::MultiPass,
+    raygun::RayGun, tesseract::Tesseract,
 };
 use warp_fs_ipfs::config::FsIpfsConfig;
 use warp_mp_ipfs::config::MpIpfsConfig;
@@ -25,8 +21,7 @@ mod conv_stream;
 mod manager;
 pub mod ui_adapter;
 
-pub use manager::commands::{FileTransferProgress, FileTransferStep};
-pub use manager::{ConstellationCmd, MultiPassCmd, OtherCmd, RayGunCmd, TesseractCmd};
+pub use manager::{ConstellationCmd, MultiPassCmd, RayGunCmd, TesseractCmd};
 
 pub type WarpCmdTx = UnboundedSender<WarpCmd>;
 pub type WarpCmdRx = Arc<Mutex<UnboundedReceiver<WarpCmd>>>;
@@ -64,10 +59,6 @@ pub enum WarpCmd {
     RayGun(RayGunCmd),
     #[display(fmt = "Constellation {{ {_0} }} ")]
     Constellation(ConstellationCmd),
-    // these commands may not actually be warp commands, but just require a long running
-    // async task, executed separately from the UI
-    #[display(fmt = "Other {{ {_0} }} ")]
-    Other(OtherCmd),
 }
 
 /// Spawns a task which manages multiple streams, channels, and tasks related to warp
@@ -80,12 +71,6 @@ pub struct WarpRunner {
 impl std::ops::Drop for WarpRunner {
     fn drop(&mut self) {
         self.notify.notify_waiters();
-    }
-}
-
-impl Default for WarpRunner {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -119,7 +104,7 @@ async fn handle_login(notify: Arc<Notify>) {
         .await
         .expect("failed to initialize tesseract");
 
-    let mut warp = match warp_initialization(tesseract).await {
+    let mut warp = match warp_initialization(tesseract, false).await {
         Ok(w) => w,
         Err(e) => {
             log::error!("warp init failed: {}", e);
@@ -148,7 +133,7 @@ async fn handle_login(notify: Arc<Notify>) {
                             let tesseract = init_tesseract(true)
                                 .await
                                 .expect("failed to initialize tesseract");
-                            warp = match warp_initialization(tesseract).await {
+                            warp = match warp_initialization(tesseract, false).await {
                                 Ok(w) => w,
                                 Err(e) => {
                                     log::error!("warp init failed: {}", e);
@@ -164,9 +149,9 @@ async fn handle_login(notify: Arc<Notify>) {
                         };
                         match warp.multipass.create_identity(Some(&username), None).await {
                             Ok(_id) =>  match wait_for_multipass(&mut warp, notify.clone()).await {
-                                Ok(ident) => match save_tesseract(&warp.tesseract) {
+                                Ok(_) => match save_tesseract(&warp.tesseract) {
                                     Ok(_) => {
-                                        let _ = rsp.send(Ok(ident));
+                                        let _ = rsp.send(Ok(()));
                                         break Some(warp);
                                     }
                                     Err(e) => {
@@ -193,8 +178,8 @@ async fn handle_login(notify: Arc<Notify>) {
                             continue;
                         };
                         match wait_for_multipass(&mut warp, notify.clone()).await {
-                            Ok(ident) => {
-                                let _ = rsp.send(Ok(ident));
+                            Ok(_) => {
+                                let _ = rsp.send(Ok(()));
                                 break Some(warp);
                             },
                             Err(e) => {
@@ -225,14 +210,11 @@ async fn handle_login(notify: Arc<Notify>) {
     }
 }
 
-async fn wait_for_multipass(
-    warp: &mut manager::Warp,
-    notify: Arc<Notify>,
-) -> Result<multipass::identity::Identity, Error> {
+async fn wait_for_multipass(warp: &mut manager::Warp, notify: Arc<Notify>) -> Result<(), Error> {
     let multipass_init_done = async {
         loop {
             match warp.multipass.get_own_identity().await {
-                Ok(ident) => return Ok(ident),
+                Ok(_) => return Ok(()),
                 Err(e) => match e {
                     Error::MultiPassExtensionUnavailable => {
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -274,7 +256,7 @@ async fn init_tesseract(overwrite_old_account: bool) -> Result<Tesseract, Error>
     // to fix this, manually delete the file and re-create it.
     if overwrite_old_account {
         // delete old account data
-        if let Err(e) = std::fs::remove_dir_all(&STATIC_ARGS.uplink_path) {
+        if let Err(e) = std::fs::remove_dir_all(&STATIC_ARGS.light_path) {
             log::warn!("failed to delete uplink directory: {}", e);
         }
 
@@ -319,16 +301,25 @@ async fn init_tesseract(overwrite_old_account: bool) -> Result<Tesseract, Error>
 }
 
 // tesseract needs to be initialized before warp is initialized. need to call this function again once tesseract is unlocked by the password
-async fn warp_initialization(tesseract: Tesseract) -> Result<manager::Warp, warp::error::Error> {
+async fn warp_initialization(
+    tesseract: Tesseract,
+    experimental: bool,
+) -> Result<manager::Warp, warp::error::Error> {
     log::debug!("warp initialization");
 
     let path = &STATIC_ARGS.warp_path;
-    let mut config = MpIpfsConfig::production(path, STATIC_ARGS.experimental);
+    let mut config = MpIpfsConfig::production(path, experimental);
     config.ipfs_setting.portmapping = true;
-    config.ipfs_setting.agent_version = Some("Uplink".into());
     let account = warp_mp_ipfs::ipfs_identity_persistent(config, tesseract.clone(), None)
         .await
         .map(|mp| Box::new(mp) as Account)?;
+
+    // let storage = warp_fs_ipfs::IpfsFileSystem::<warp_fs_ipfs::Persistent>::new(
+    //     account.clone(),
+    //     Some(FsIpfsConfig::production(path)),
+    // )
+    // .await
+    // .map(|ct| Box::new(ct) as Storage)?;
 
     let storage =
         warp_fs_ipfs::IpfsFileSystem::new(account.clone(), Some(FsIpfsConfig::production(path)))
@@ -337,6 +328,15 @@ async fn warp_initialization(tesseract: Tesseract) -> Result<manager::Warp, warp
 
     // FYI: setting `rg_config.store_setting.disable_sender_event_emit` to `true` will prevent broadcasting `ConversationCreated` on the sender side
     let rg_config = RgIpfsConfig::production(path);
+
+    // let messaging = warp_rg_ipfs::IpfsMessaging::<warp_mp_ipfs::Persistent>::new(
+    //     Some(rg_config),
+    //     account.clone(),
+    //     Some(storage.clone()),
+    //     None,
+    // )
+    // .await
+    // .map(|rg| Box::new(rg) as Messaging)?;
 
     let messaging = warp_rg_ipfs::IpfsMessaging::new(
         Some(rg_config),

@@ -15,7 +15,6 @@ pub enum MultiPassEvent {
     FriendOffline(state::Identity),
     Blocked(state::Identity),
     Unblocked(state::Identity),
-    IdentityUpdate(state::Identity),
 }
 
 pub async fn convert_multipass_event(
@@ -23,6 +22,7 @@ pub async fn convert_multipass_event(
     account: &mut super::super::Account,
     _messaging: &mut super::super::Messaging,
 ) -> Result<MultiPassEvent, Error> {
+    //println!("got {:?}", &event);
     let evt = match event {
         MultiPassEventKind::FriendRequestSent { to } => {
             let identity = did_to_identity(&to, account).await?;
@@ -30,6 +30,8 @@ pub async fn convert_multipass_event(
         }
         MultiPassEventKind::FriendRequestReceived { from } => {
             let identity = did_to_identity(&from, account).await?;
+
+            //println!("friend request received: {:#?}", identity);
             MultiPassEvent::FriendRequestReceived(identity)
         }
         MultiPassEventKind::IncomingFriendRequestClosed { did }
@@ -62,10 +64,6 @@ pub async fn convert_multipass_event(
         MultiPassEventKind::Unblocked { did } => {
             let identity = did_to_identity(&did, account).await?;
             MultiPassEvent::Unblocked(identity)
-        }
-        MultiPassEventKind::IdentityUpdate { did, .. } => {
-            let identity = did_to_identity(&did, account).await?;
-            MultiPassEvent::IdentityUpdate(identity)
         }
         _ => MultiPassEvent::None,
     };

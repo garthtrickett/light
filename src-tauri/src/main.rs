@@ -3,7 +3,9 @@
     windows_subsystem = "windows"
 )]
 
+use crate::warp_runner::ui_adapter::ChatAdapter;
 use crossbeam::channel;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::prelude::*;
 use std::pin::Pin;
@@ -32,6 +34,7 @@ use warp::crypto::DID;
 mod state;
 use crate::state::friends;
 use crate::state::storage;
+use crate::state::Chat;
 use once_cell::sync::Lazy;
 use state::State;
 use std::sync::Arc;
@@ -70,6 +73,7 @@ enum LogProfile {
 }
 #[derive(Debug)]
 pub struct StaticArgs {
+    pub uplink_path: PathBuf,
     pub light_path: PathBuf,
     pub cache_path: PathBuf,
     pub config_path: PathBuf,
@@ -79,6 +83,8 @@ pub struct StaticArgs {
     pub use_mock: bool,
     pub mock_cache_path: PathBuf,
     pub id_path: PathBuf,
+    pub experimental: bool,
+    pub login_config_path: PathBuf,
 }
 #[derive(Debug, Parser)]
 #[clap(name = "")]
@@ -107,6 +113,7 @@ pub static STATIC_ARGS: Lazy<StaticArgs> = Lazy::new(|| {
     };
     let warp_path = light_path.join("warp");
     StaticArgs {
+        uplink_path: light_path.clone(),
         light_path: light_path.clone(),
         cache_path: light_path.join("state.json"),
         config_path: light_path.join("Config.json"),
@@ -116,6 +123,8 @@ pub static STATIC_ARGS: Lazy<StaticArgs> = Lazy::new(|| {
         logger_path: light_path.join("debug.log"),
         mock_cache_path: light_path.join("mock-state.json"),
         use_mock: args.no_mock, // remove the ! to disable mock data
+        experimental: args.experimental_node,
+        login_config_path: light_path.join("login_config.json"),
     }
 });
 // --- END WARP REQS
@@ -156,10 +165,8 @@ impl State {
                 Sender<state::friends::Friends>,
                 Receiver<state::friends::Friends>,
             ) = channel();
-            let (tx3, rx3): (
-                Sender<(state::identity::Identity, HashMap<Uuid, state::Chat>)>,
-                Receiver<(state::identity::Identity, HashMap<Uuid, state::Chat>)>,
-            ) = channel();
+            let (tx3, rx3): (Sender<HashMap<Uuid, Chat>>, Receiver<HashMap<Uuid, Chat>>) =
+                channel();
             let (tx4, rx4): (
                 Sender<state::storage::Storage>,
                 Receiver<state::storage::Storage>,
@@ -206,8 +213,7 @@ impl State {
             self.friends = friends;
 
             let conversations_tuple = rx3.recv().unwrap();
-            let own_id = conversations_tuple.0;
-            let mut all_chats = conversations_tuple.1;
+            let mut all_chats = conversations_tuple;
             for (k, v) in self.chats.all {
                 // the # of unread chats defaults to the length of the conversation. but this number
                 // is stored in state
@@ -217,7 +223,6 @@ impl State {
             }
 
             self.chats.all = all_chats;
-            self.account.identity = own_id;
             self.chats.initialized = true;
             let storage = rx4.recv().unwrap();
             self.storage = storage;
@@ -268,7 +273,8 @@ impl State {
                 // println!("string_val_two{:?}", string_val_two.unwrap());
                 // println!("outcome{:?}", outcome.unwrap());
                 // string_val_two == message
-                let outcome_two = send_message(string_val_two.unwrap(), outcome.unwrap().id).await;
+                let outcome_two =
+                    send_message(string_val_two.unwrap(), outcome.unwrap().inner.id).await;
 
                 println!("OUTCOME TWO: {:?}", outcome_two);
                 // tx.send(outcome).unwrap();
@@ -426,12 +432,12 @@ async fn main() {
         .expect("error while running tauri application");
 }
 
-async fn initialize_conversations() -> (state::identity::Identity, HashMap<Uuid, state::Chat>) {
+async fn initialize_conversations() -> HashMap<Uuid, Chat> {
     // Initialise conversations
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
     let res = loop {
         let (tx, rx) = oneshot::channel::<
-            Result<(state::Identity, HashMap<Uuid, state::Chat>), warp::error::Error>,
+            Result<(HashMap<Uuid, Chat>, HashSet<state::identity::Identity>), warp::error::Error>,
         >();
         warp_cmd_tx
             .send(WarpCmd::RayGun(RayGunCmd::InitializeConversations {
@@ -445,13 +451,15 @@ async fn initialize_conversations() -> (state::identity::Identity, HashMap<Uuid,
         }
     };
     println!("initialize conversations successsful");
-    res.unwrap()
+    res.unwrap().0
 }
 
 async fn initialize_friends() -> state::friends::Friends {
     // Initialize friends
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
-    let (tx, rx) = oneshot::channel::<Result<friends::Friends, warp::error::Error>>();
+    let (tx, rx) = oneshot::channel::<
+        Result<(state::friends::Friends, HashSet<state::identity::Identity>), warp::error::Error>,
+    >();
     warp_cmd_tx
         .send(WarpCmd::MultiPass(MultiPassCmd::InitializeFriends {
             rsp: tx,
@@ -460,7 +468,7 @@ async fn initialize_friends() -> state::friends::Friends {
 
     let res = rx.await.expect("failed to get response from warp_runner");
     let friends = res.expect("Something broke");
-    friends
+    friends.0
 }
 
 async fn initialize_files() -> state::storage::Storage {
@@ -496,9 +504,9 @@ async fn send_friend_request(did_key: String) -> bool {
     true
 }
 
-async fn create_conversation(did_key: String) -> Result<state::chats::Chat, warp::error::Error> {
+async fn create_conversation(did_key: String) -> Result<ChatAdapter, warp::error::Error> {
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
-    let (tx, rx) = oneshot::channel::<Result<state::chats::Chat, _>>();
+    let (tx, rx) = oneshot::channel::<Result<ChatAdapter, _>>();
     warp_cmd_tx
         .send(WarpCmd::RayGun(RayGunCmd::CreateConversation {
             rsp: tx,
@@ -713,7 +721,8 @@ async fn try_login(passphrase: String) -> Result<bool, Error> {
     // Try Login
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
 
-    let (tx, rx) = oneshot::channel::<Result<(), warp::error::Error>>();
+    let (tx, rx) =
+        oneshot::channel::<Result<warp::multipass::identity::Identity, warp::error::Error>>();
     warp_cmd_tx
         .send(WarpCmd::MultiPass(MultiPassCmd::TryLogIn {
             passphrase,
@@ -755,7 +764,8 @@ async fn send_own_did_key_to_front_end() -> Result<String, Error> {
 
 async fn create_identity(username: String, passphrase: String) -> bool {
     // Create Identity
-    let (tx, rx) = oneshot::channel::<Result<(), warp::error::Error>>();
+    let (tx, rx) =
+        oneshot::channel::<Result<warp::multipass::identity::Identity, warp::error::Error>>();
 
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
     warp_cmd_tx
@@ -839,5 +849,6 @@ fn process_multipass_event(event: MultiPassEvent) {
         MultiPassEvent::Unblocked(identity) => {
             // self.unblock(&identity);
         }
+        MultiPassEvent::IdentityUpdate(_) => todo!(),
     }
 }

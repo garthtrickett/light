@@ -1,11 +1,13 @@
 use uuid::Uuid;
 use warp::{error::Error, logging::tracing::log, raygun::RayGunEventKind};
 
-use super::{super::conv_stream, conversation_to_chat, ChatAdapter};
+use crate::state::{self};
+
+use super::{super::conv_stream, conversation_to_chat};
 
 #[allow(clippy::large_enum_variant)]
 pub enum RayGunEvent {
-    ConversationCreated(ChatAdapter),
+    ConversationCreated(state::Chat),
     ConversationDeleted(Uuid),
 }
 
@@ -20,7 +22,7 @@ pub async fn convert_raygun_event(
         RayGunEventKind::ConversationCreated { conversation_id } => {
             let conv = messaging.get_conversation(conversation_id).await?;
             let chat = conversation_to_chat(&conv, account, messaging).await?;
-            stream_manager.add_stream(chat.inner.id, messaging).await?;
+            stream_manager.add_stream(chat.id, messaging).await?;
             RayGunEvent::ConversationCreated(chat)
         }
         RayGunEventKind::ConversationDeleted { conversation_id } => {

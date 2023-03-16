@@ -9,34 +9,102 @@ mod raygun_event;
 pub use message_event::{convert_message_event, MessageEvent};
 pub use multipass_event::{convert_multipass_event, MultiPassEvent};
 pub use raygun_event::{convert_raygun_event, RayGunEvent};
+use uuid::Uuid;
 
-use std::collections::{HashMap, VecDeque};
-
+use crate::state::{self, chats};
+use futures::{stream::FuturesOrdered, FutureExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use warp::{
     crypto::DID,
     error::Error,
+    logging::tracing::log,
+    multipass::identity::{Identity, Platform},
     raygun::{self, Conversation, MessageOptions},
 };
 
-use crate::state::{self, chats};
+/// the UI needs additional information for message replies, namely the text of the message being replied to.
+/// fetch that before sending the message to the UI.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Message {
+    pub inner: warp::raygun::Message,
+    pub in_reply_to: Option<String>,
+    /// this field exists so that the UI can tell Dioxus when a message has been edited and thus
+    /// needs to be re-rendered. Before the addition of this field, the compose view was
+    /// using the message Uuid, but this doesn't change when a message is edited.
+    pub key: String,
+}
 
+pub struct ChatAdapter {
+    pub inner: chats::Chat,
+    pub identities: HashSet<state::identity::Identity>,
+}
+
+/// if a raygun::Message is in reply to another message, attempt to fetch part of the message text
+pub async fn convert_raygun_message(
+    messaging: &super::Messaging,
+    msg: &raygun::Message,
+) -> Message {
+    let reply: Option<raygun::Message> = match msg.replied() {
+        Some(id) => messaging.get_message(msg.conversation_id(), id).await.ok(),
+        None => None,
+    };
+
+    Message {
+        inner: msg.clone(),
+        in_reply_to: reply.and_then(|msg| msg.value().first().cloned()),
+        key: Uuid::new_v4().to_string(),
+    }
+}
+
+// this function is used in response to warp events. assuming that the DID from these events is valid.
+// Warp sends the Identity over. if the Identity has not been received yet, get_identity will fail for
+// a valid DID.
 pub async fn did_to_identity(
     did: &DID,
     account: &super::Account,
 ) -> Result<state::Identity, Error> {
-    account
-        .get_identity(did.clone().into())
-        .await
-        // if Ok, get the first item in the vector. 
-        // if the vector is empty, become Error::IdentityDoesntExist
-        .and_then(|v| v.first().cloned().ok_or(Error::IdentityDoesntExist))
-        // if Ok, convert from warp::Identity to state::Identity
-        .map(state::Identity::from)
+    let identity = match account.get_identity(did.clone().into()).await {
+        Ok(list) => list.first().cloned(),
+        Err(e) => {
+            log::warn!("multipass couldn't find identity {}: {}", did, e);
+            None
+        }
+    };
+    let identity = match identity {
+        Some(id) => {
+            let status = account
+                .identity_status(&id.did_key())
+                .await
+                .unwrap_or(warp::multipass::identity::IdentityStatus::Offline);
+            let platform = account
+                .identity_platform(&id.did_key())
+                .await
+                .unwrap_or(Platform::Unknown);
+            state::Identity::new(id, status, platform)
+        }
+        None => {
+            let mut default: Identity = Default::default();
+            default.set_did_key(did.clone());
+            let did_str = &did.to_string();
+            // warning: assumes DIDs are very long. this can cause a panic if that ever changes
+            let start = did_str
+                .get(8..=10)
+                .ok_or(Error::OtherWithContext("DID too short".into()))?;
+            let len = did_str.len();
+            let end = did_str
+                .get(len - 3..)
+                .ok_or(Error::OtherWithContext("DID too short".into()))?;
+            default.set_username(&format!("{start}...{end}"));
+            state::Identity::from(default)
+        }
+    };
+    Ok(identity)
 }
 
 pub async fn dids_to_identity(
     dids: &[DID],
-    account: &mut super::Account,
+    account: &super::Account,
 ) -> Result<Vec<state::Identity>, Error> {
     let mut ret = Vec::new();
     ret.reserve(dids.len());
@@ -51,27 +119,36 @@ pub async fn conversation_to_chat(
     conv: &Conversation,
     account: &super::Account,
     messaging: &mut super::Messaging,
-) -> Result<chats::Chat, Error> {
+) -> Result<ChatAdapter, Error> {
     // todo: should Chat::participants include self?
-    let mut participants = Vec::new();
-    for id in conv.recipients() {
-        let identity = did_to_identity(&id, account).await?;
-        participants.push(identity);
-    }
+    let identities = dids_to_identity(&conv.recipients(), account).await?;
+    let identities = HashSet::from_iter(identities.iter().cloned());
 
     // todo: warp doesn't support paging yet. it also doesn't check the range bounds
     let unreads = messaging.get_message_count(conv.id()).await?;
-    let messages: VecDeque<raygun::Message> = messaging
+    let messages = messaging
         .get_messages(conv.id(), MessageOptions::default().set_range(0..unreads))
-        .await?
-        .into();
+        .await?;
 
-    Ok(chats::Chat {
-        id: conv.id(),
-        participants,
-        messages,
-        unreads: unreads as u32,
-        replying_to: None,
-        typing_indicator: HashMap::new(),
-    })
+    let messages = FuturesOrdered::from_iter(
+        messages
+            .iter()
+            .map(|message| convert_raygun_message(messaging, message).boxed()),
+    )
+    .collect()
+    .await;
+
+    let adapter = ChatAdapter {
+        inner: chats::Chat {
+            id: conv.id(),
+            participants: HashSet::from_iter(conv.recipients()),
+            messages,
+            unreads: unreads as u32,
+            replying_to: None,
+            typing_indicator: HashMap::new(),
+        },
+        identities,
+    };
+
+    Ok(adapter)
 }

@@ -1,6 +1,6 @@
 use std::{
     ffi::OsStr,
-    io::{Cursor, Read},
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -8,25 +8,51 @@ use std::{
 use derive_more::Display;
 
 use futures::{channel::oneshot, StreamExt};
-use image::io::Reader as ImageReader;
-// use kit::elements::file::VIDEO_FILE_EXTENSIONS;
+use humansize::{format_size, DECIMAL};
 use mime::*;
 use once_cell::sync::Lazy;
 use tempfile::TempDir;
+use tokio::sync::mpsc;
 use tokio_util::io::ReaderStream;
 
 use crate::state::storage::Storage as uplink_storage;
 use crate::warp_runner::Storage as warp_storage;
 
 use warp::{
-    constellation::{directory::Directory, Progression},
+    constellation::{
+        directory::Directory,
+        item::{Item, ItemType},
+        Progression,
+    },
     error::Error,
     logging::tracing::log,
     sync::RwLock,
 };
 
+pub const VIDEO_FILE_EXTENSIONS: &[&str] = &[
+    ".mp4", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v", ".3gp",
+];
+
+pub const IMAGE_EXTENSIONS: &[&str] = &[
+    ".png", ".jpg", ".jpeg", ".svg", ".heic", ".tiff", ".gif", ".webp", ".apng", ".avif", ".ico",
+    ".bmp", ".svgz",
+];
+
 static DIRECTORIES_AVAILABLE_TO_BROWSE: Lazy<RwLock<Vec<Directory>>> =
     Lazy::new(|| RwLock::new(Vec::new()));
+
+pub enum FileTransferStep {
+    Start(String),
+    DuplicateName(Option<String>),
+    Upload(String),
+    Thumbnail(Option<()>),
+}
+
+pub enum FileTransferProgress<T> {
+    Error(warp::error::Error),
+    Finished(T),
+    Step(FileTransferStep),
+}
 
 #[derive(Display, Debug)]
 pub enum ConstellationCmd {
@@ -52,6 +78,25 @@ pub enum ConstellationCmd {
     #[display(fmt = "UploadFiles {{ files_path: {files_path:?} }} ")]
     UploadFiles {
         files_path: Vec<PathBuf>,
+        rsp: mpsc::UnboundedSender<FileTransferProgress<uplink_storage>>,
+    },
+    #[display(fmt = "RenameItems {{ old_name: {old_name}, new_name: {new_name} }} ")]
+    RenameItem {
+        old_name: String,
+        new_name: String,
+        rsp: oneshot::Sender<Result<uplink_storage, warp::error::Error>>,
+    },
+    #[display(
+        fmt = "DownloadItems {{ file_name: {file_name:?}, local_path_to_save_file: {local_path_to_save_file:?} }} "
+    )]
+    DownloadFile {
+        file_name: String,
+        local_path_to_save_file: PathBuf,
+        rsp: oneshot::Sender<Result<(), warp::error::Error>>,
+    },
+    #[display(fmt = "DeleteItems {{ item: {item:?} }} ")]
+    DeleteItems {
+        item: Item,
         rsp: oneshot::Sender<Result<uplink_storage, warp::error::Error>>,
     },
 }
@@ -81,10 +126,150 @@ pub async fn handle_constellation_cmd(cmd: ConstellationCmd, warp_storage: &mut 
             let _ = rsp.send(r);
         }
         ConstellationCmd::UploadFiles { files_path, rsp } => {
-            let r = upload_files(warp_storage, files_path).await;
+            upload_files(warp_storage, files_path, rsp).await;
+        }
+        ConstellationCmd::DownloadFile {
+            file_name,
+            local_path_to_save_file,
+            rsp,
+        } => {
+            let r = download_file(warp_storage, file_name, local_path_to_save_file).await;
+            let _ = rsp.send(r);
+        }
+        ConstellationCmd::RenameItem {
+            old_name,
+            new_name,
+            rsp,
+        } => {
+            let r = rename_item(old_name, new_name, warp_storage).await;
+            let _ = rsp.send(r);
+        }
+        ConstellationCmd::DeleteItems { item, rsp } => {
+            let r = delete_items(warp_storage, item).await;
             let _ = rsp.send(r);
         }
     }
+}
+
+async fn delete_items(
+    warp_storage: &mut warp_storage,
+    item: Item,
+) -> Result<uplink_storage, Error> {
+    // If is file, just a small function solve it
+    if item.is_file() {
+        let file_name = item.name();
+        match warp_storage.remove(&file_name, false).await {
+            Ok(_) => log::info!("File deleted: {:?}", file_name),
+            Err(error) => log::error!("Error to delete file {:?}, {:?}", file_name, error),
+        };
+        return get_items_from_current_directory(warp_storage);
+    };
+    // Code keeps here just if item is a directory
+    let first_dir = warp_storage.current_directory()?;
+    let mut current_dirs_opened = get_directories_opened();
+    current_dirs_opened.push(first_dir.clone());
+
+    let mut dirs: Vec<Directory> = current_dirs_opened;
+
+    match warp_storage.select(&item.name()) {
+        Ok(_) => log::debug!("Selected new dir: {:?}.", item.name()),
+        Err(error) => {
+            log::error!("Error to select new dir: {:?}.", error);
+            return Err(error);
+        }
+    };
+    dirs.push(warp_storage.current_directory()?);
+
+    while let Some(last_dir) = dirs.clone().last() {
+        if last_dir.id() == first_dir.id() {
+            set_new_directory_opened(dirs.as_mut(), last_dir.clone());
+            break;
+        };
+
+        let dir_items = last_dir.get_items();
+
+        let is_there_file_yet = last_dir
+            .get_items()
+            .iter()
+            .any(|f| f.item_type() == ItemType::FileItem);
+
+        let is_there_directory_yet = last_dir
+            .get_items()
+            .iter()
+            .any(|f| f.item_type() == ItemType::DirectoryItem);
+
+        // If there is a sub directory yet
+        // Select it and keep loop
+        if is_there_directory_yet {
+            for item in dir_items {
+                if item.is_directory() {
+                    match warp_storage.select(&item.name()) {
+                        Ok(_) => log::debug!("Selected new dir: {:?}.", item.name()),
+                        Err(error) => {
+                            log::error!("Error to select new dir: {:?}.", error);
+                            return Err(error);
+                        }
+                    };
+                    dirs.push(warp_storage.current_directory()?);
+                    break;
+                }
+            }
+            continue;
+        };
+
+        // No more files, it pop current dir on dirs variable
+        // And remove current dir.
+        //
+        // After it, back to previous dir and keep loop verifying other files and sub dirs.
+        if !is_there_file_yet {
+            dirs.pop();
+            if let Some(previous_dir) = dirs.last() {
+                previous_dir.remove_item(&last_dir.name())?;
+                log::info!("Directory {:?} was removed.", &last_dir.name());
+            };
+
+            match warp_storage.go_back() {
+                Ok(_) => {
+                    log::debug!(
+                        "Selected new dir: {:?}",
+                        warp_storage.current_directory()?.name()
+                    );
+                }
+                Err(error) => {
+                    log::error!("Error on go back a directory: {error}");
+                    return Err(error);
+                }
+            };
+            continue;
+        }
+
+        // If code arrives here, just run into files inside that dir and delete all of them.
+        for file in last_dir.get_items().iter().filter(|f| f.is_file()) {
+            match warp_storage.remove(&file.name(), false).await {
+                Ok(_) => log::info!(
+                    "File deleted: {:?}, on directory: {:?}.",
+                    file.name(),
+                    warp_storage.current_directory()?.name()
+                ),
+                Err(error) => {
+                    log::error!("Error to delete this file: {:?}, {:?}", file.name(), error)
+                }
+            };
+        }
+    }
+    get_items_from_current_directory(warp_storage)
+}
+
+async fn rename_item(
+    old_name: String,
+    new_name: String,
+    warp_storage: &mut warp_storage,
+) -> Result<uplink_storage, Error> {
+    if let Err(error) = warp_storage.rename(&old_name, &new_name).await {
+        log::error!("Failed to rename item: {error}");
+    }
+
+    get_items_from_current_directory(warp_storage)
 }
 
 async fn create_new_directory(
@@ -166,9 +351,9 @@ fn go_back_to_previous_directory(
     directory: Directory,
 ) -> Result<uplink_storage, Error> {
     let mut current_dirs = get_directories_opened();
-
     loop {
         let current_dir = warp_storage.current_directory()?;
+
         current_dirs.remove(current_dirs.len() - 1);
 
         if current_dir.id() == directory.id() {
@@ -188,8 +373,16 @@ fn go_back_to_previous_directory(
 async fn upload_files(
     warp_storage: &mut warp_storage,
     files_path: Vec<PathBuf>,
-) -> Result<uplink_storage, Error> {
-    let current_directory = warp_storage.current_directory()?;
+    // todo: send FileTransferProgress::Step until done
+    tx: mpsc::UnboundedSender<FileTransferProgress<uplink_storage>>,
+) {
+    let current_directory = match warp_storage.current_directory() {
+        Ok(d) => d,
+        Err(e) => {
+            let _ = tx.send(FileTransferProgress::Error(e));
+            return;
+        }
+    };
     for file_path in files_path {
         let mut filename = match file_path
             .file_name()
@@ -200,11 +393,19 @@ async fn upload_files(
         };
         let local_path = Path::new(&file_path).to_string_lossy().to_string();
 
+        let _ = tx.send(FileTransferProgress::Step(FileTransferStep::Start(
+            filename.clone(),
+        )));
+
         let original = filename.clone();
         let file = PathBuf::from(&original);
-
+        let _ = tx.send(FileTransferProgress::Step(FileTransferStep::DuplicateName(
+            None,
+        )));
         filename = rename_if_duplicate(current_directory.clone(), filename.clone(), file);
-
+        let _ = tx.send(FileTransferProgress::Step(FileTransferStep::DuplicateName(
+            Some(filename.clone()),
+        )));
         let tokio_file = match tokio::fs::File::open(&local_path).await {
             Ok(file) => file,
             Err(error) => {
@@ -251,18 +452,31 @@ async fn upload_files(
                                     (((current as f64) / (total as f64)) * 100.) as usize;
                                 if previous_percentage != current_percentage {
                                     previous_percentage = current_percentage;
+                                    let readable_current = format_size(current, DECIMAL);
+                                    let percentage_number =
+                                        ((current as f64) / (total as f64)) * 100.;
+
+                                    let _ = tx.send(FileTransferProgress::Step(
+                                        FileTransferStep::Upload(format!(
+                                            "{}%",
+                                            percentage_number as usize
+                                        )),
+                                    ));
+
                                     log::info!(
-                                        "{}% completed -> written {current} bytes",
-                                        (((current as f64) / (total as f64)) * 100.) as usize
+                                        "{}% completed -> written {readable_current}",
+                                        percentage_number as usize
                                     )
                                 }
                             }
                         }
                         Progression::ProgressComplete { name, total } => {
-                            log::info!(
-                                "{name} has been uploaded with {} MB",
-                                total.unwrap_or_default() / 1024 / 1024
-                            );
+                            let total = total.unwrap_or_default();
+                            let readable_total = format_size(total, DECIMAL);
+                            let _ = tx.send(FileTransferProgress::Step(FileTransferStep::Upload(
+                                readable_total.clone(),
+                            )));
+                            log::info!("{name} has been uploaded with {}", readable_total);
                         }
                         Progression::ProgressFailed {
                             name,
@@ -277,20 +491,64 @@ async fn upload_files(
                         }
                     }
                 }
-                // match set_thumbnail_if_file_is_image(warp_storage, filename.clone()).await {
-                //     Ok(_) => log::info!("Image Thumbnail uploaded"),
-                //     Err(error) => log::error!("Error on update thumbnail for image: {:?}", error),
-                // }
-                // match set_thumbnail_if_file_is_video(warp_storage, filename.clone(), file_path) {
-                //     Ok(_) => log::info!("Video Thumbnail uploaded"),
-                //     Err(error) => log::error!("Error on update thumbnail for video: {:?}", error),
-                // }
+
+                let video_formats = VIDEO_FILE_EXTENSIONS.to_vec();
+                let image_formats = IMAGE_EXTENSIONS.to_vec();
+
+                let file_extension = std::path::Path::new(&filename)
+                    .extension()
+                    .and_then(OsStr::to_str)
+                    .map(|s| format!(".{s}"))
+                    .unwrap_or_default();
+
+                if image_formats.iter().any(|f| f == &file_extension) {
+                    match set_thumbnail_if_file_is_image(warp_storage, filename.clone()).await {
+                        Ok(_) => {
+                            log::info!("Image Thumbnail uploaded");
+                            let _ = tx.send(FileTransferProgress::Step(
+                                FileTransferStep::Thumbnail(Some(())),
+                            ));
+                        }
+                        Err(error) => {
+                            log::error!("Not possible to update thumbnail for image: {:?}", error);
+                            let _ = tx.send(FileTransferProgress::Step(
+                                FileTransferStep::Thumbnail(None),
+                            ));
+                        }
+                    };
+                }
+
+                if video_formats.iter().any(|f| f == &file_extension) {
+                    match set_thumbnail_if_file_is_video(
+                        warp_storage,
+                        filename.clone(),
+                        file_path.clone(),
+                    ) {
+                        Ok(_) => {
+                            log::info!("Video Thumbnail uploaded");
+                            let _ = tx.send(FileTransferProgress::Step(
+                                FileTransferStep::Thumbnail(Some(())),
+                            ));
+                        }
+                        Err(error) => {
+                            log::error!("Not possible to update thumbnail for video: {:?}", error);
+                            let _ = tx.send(FileTransferProgress::Step(
+                                FileTransferStep::Thumbnail(None),
+                            ));
+                        }
+                    };
+                }
+
                 log::info!("{:?} file uploaded!", filename);
             }
             Err(error) => log::error!("Error when upload file: {:?}", error),
         }
     }
-    get_items_from_current_directory(warp_storage)
+    let ret = match get_items_from_current_directory(warp_storage) {
+        Ok(r) => FileTransferProgress::Finished(r),
+        Err(e) => FileTransferProgress::Error(e),
+    };
+    let _ = tx.send(ret);
 }
 
 fn rename_if_duplicate(
@@ -309,6 +567,7 @@ fn rename_if_duplicate(
             .extension()
             .and_then(OsStr::to_str)
             .map(str::to_string);
+
         let file_stem = file_pathbuf
             .file_stem()
             .and_then(OsStr::to_str)
@@ -320,126 +579,119 @@ fn rename_if_duplicate(
             }
             _ => format!("{original} ({count_index_for_duplicate_filename})"),
         };
-
         log::info!("Duplicate name, changing file name to {}", new_file_name);
         count_index_for_duplicate_filename += 1;
     }
     new_file_name
 }
 
-// fn set_thumbnail_if_file_is_video(
-//     warp_storage: &warp_storage,
-//     filename_to_save: String,
-//     file_path: PathBuf,
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     let video_formats = VIDEO_FILE_EXTENSIONS.to_vec();
+fn set_thumbnail_if_file_is_video(
+    warp_storage: &warp_storage,
+    filename_to_save: String,
+    file_path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let item = warp_storage
+        .current_directory()?
+        .get_item(&filename_to_save)?;
 
-//     let file_extension = std::path::Path::new(&filename_to_save)
-//         .extension()
-//         .and_then(OsStr::to_str)
-//         .map(|s| format!(".{s}"))
-//         .unwrap_or_default();
+    let file_stem = file_path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .map(str::to_string)
+        .unwrap_or_default();
 
-//     if !video_formats.iter().any(|f| f == &file_extension) {
-//         log::warn!("It is not a video file!");
-//         return Err(Box::from(Error::InvalidDataType));
-//     };
+    let temp_dir = TempDir::new()?;
 
-//     let item = warp_storage
-//         .current_directory()?
-//         .get_item(&filename_to_save)?;
+    let temp_path = temp_dir.path().join(file_stem);
 
-//     let file_stem = file_path
-//         .file_stem()
-//         .and_then(OsStr::to_str)
-//         .map(str::to_string)
-//         .unwrap_or_default();
+    let output = Command::new("ffmpeg")
+        .args([
+            "-i",
+            &file_path.to_string_lossy(),
+            "-vf",
+            "select=eq(pict_type\\,I)",
+            "-q:v",
+            "2",
+            "-f",
+            "image2",
+            "-update",
+            "1",
+            &temp_path.to_string_lossy(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
 
-//     let temp_dir = TempDir::new()?;
+    if let Some(mut child) = output.stdout {
+        let mut contents = vec![];
 
-//     let temp_path = temp_dir.path().join(file_stem);
+        child.read_to_end(&mut contents)?;
 
-//     let output = Command::new("ffmpeg")
-//         .args([
-//             "-i",
-//             &file_path.to_string_lossy().to_string(),
-//             "-vf",
-//             "select=eq(pict_type\\,I)",
-//             "-q:v",
-//             "2",
-//             "-f",
-//             "image2",
-//             "-update",
-//             "1",
-//             &temp_path.to_string_lossy().to_string(),
-//         ])
-//         .stdout(Stdio::piped())
-//         .stderr(Stdio::null())
-//         .spawn()?;
+        let image = std::fs::read(temp_path)?;
 
-//     if let Some(mut child) = output.stdout {
-//         let mut contents = vec![];
+        let prefix = format!("data:{};base64,", IMAGE_JPEG);
+        let base64_image = base64::encode(image);
+        let img = prefix + base64_image.as_str();
+        item.set_thumbnail(&img);
+        Ok(())
+    } else {
+        log::warn!("Failed to save thumbnail from a video file");
+        Err(Box::from(Error::InvalidConversion))
+    }
+}
 
-//         child.read_to_end(&mut contents)?;
+async fn set_thumbnail_if_file_is_image(
+    warp_storage: &warp_storage,
+    filename_to_save: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let item = warp_storage
+        .current_directory()?
+        .get_item(&filename_to_save)?;
+    let file = warp_storage.get_buffer(&filename_to_save).await?;
 
-//         let image = std::fs::read(temp_path)?;
+    // Since files selected are filtered to be jpg, jpeg, png or svg the last branch is not reachable
+    let extension = Path::new(&filename_to_save)
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|ext| ext.to_lowercase());
 
-//         let prefix = format!("data:{};base64,", IMAGE_JPEG.to_string());
-//         let base64_image = base64::encode(&image);
-//         let img = prefix + base64_image.as_str();
-//         item.set_thumbnail(&img);
-//         Ok(())
-//     } else {
-//         log::warn!("Failed to save thumbnail from a video file");
-//         Err(Box::from(Error::InvalidConversion))
-//     }
-// }
+    let mime = match extension {
+        Some(m) => match m.as_str() {
+            "png" => IMAGE_PNG.to_string(),
+            "jpg" => IMAGE_JPEG.to_string(),
+            "jpeg" => IMAGE_JPEG.to_string(),
+            "svg" => IMAGE_SVG.to_string(),
+            _ => {
+                log::warn!("invalid mime type: {m:?}");
+                return Err(Box::from(Error::InvalidItem));
+            }
+        },
+        None => {
+            log::warn!("thumbnail has no mime type");
+            return Err(Box::from(Error::InvalidItem));
+        }
+    };
 
-// async fn set_thumbnail_if_file_is_image(
-//     warp_storage: &warp_storage,
-//     filename_to_save: String,
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     let item = warp_storage
-//         .current_directory()?
-//         .get_item(&filename_to_save)?;
-//     let file = warp_storage.get_buffer(&filename_to_save).await?;
+    if !file.is_empty() {
+        let prefix = format!("data:{mime};base64,");
+        let base64_image = base64::encode(&file);
+        let img = prefix + base64_image.as_str();
+        item.set_thumbnail(&img);
+        Ok(())
+    } else {
+        log::warn!("thumbnail file is empty");
+        Err(Box::from(Error::InvalidItem))
+    }
+}
 
-//     // Guarantee that is an image that has been uploaded
-//     ImageReader::new(Cursor::new(&file))
-//         .with_guessed_format()?
-//         .decode()?;
-
-//     // Since files selected are filtered to be jpg, jpeg, png or svg the last branch is not reachable
-//     let extension = Path::new(&filename_to_save)
-//         .extension()
-//         .and_then(OsStr::to_str)
-//         .map(|ext| ext.to_lowercase());
-
-//     let mime = match extension {
-//         Some(m) => match m.as_str() {
-//             "png" => IMAGE_PNG.to_string(),
-//             "jpg" => IMAGE_JPEG.to_string(),
-//             "jpeg" => IMAGE_JPEG.to_string(),
-//             "svg" => IMAGE_SVG.to_string(),
-//             _ => {
-//                 log::warn!("invalid mime type: {m:?}");
-//                 return Err(Box::from(Error::InvalidItem));
-//             }
-//         },
-//         None => {
-//             log::warn!("thumbnail has no mime type");
-//             return Err(Box::from(Error::InvalidItem));
-//         }
-//     };
-
-//     if !file.is_empty() {
-//         let prefix = format!("data:{mime};base64,");
-//         let base64_image = base64::encode(&file);
-//         let img = prefix + base64_image.as_str();
-//         item.set_thumbnail(&img);
-//         Ok(())
-//     } else {
-//         log::warn!("thumbnail file is empty");
-//         Err(Box::from(Error::InvalidItem))
-//     }
-// }
+async fn download_file(
+    warp_storage: &warp_storage,
+    file_name: String,
+    local_path_to_save_file: PathBuf,
+) -> Result<(), Error> {
+    warp_storage
+        .get(&file_name, &local_path_to_save_file.to_string_lossy())
+        .await?;
+    log::info!("{file_name} downloaded");
+    Ok(())
+}

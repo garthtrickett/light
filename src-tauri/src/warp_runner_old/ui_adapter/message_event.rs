@@ -6,25 +6,14 @@ use warp::{
     raygun::{self, MessageEventKind},
 };
 
-use super::Message;
-use crate::warp_runner::ui_adapter::convert_raygun_message;
-
 pub enum MessageEvent {
     Received {
         conversation_id: Uuid,
-        message: Message,
+        message: raygun::Message,
     },
     Sent {
         conversation_id: Uuid,
-        message: Message,
-    },
-    Edited {
-        conversation_id: Uuid,
-        message: Message,
-    },
-    Deleted {
-        conversation_id: Uuid,
-        message_id: Uuid,
+        message: raygun::Message,
     },
     MessageReactionAdded {
         conversation_id: Uuid,
@@ -58,7 +47,7 @@ pub async fn convert_message_event(
             // Return the event.
             MessageEvent::Received {
                 conversation_id,
-                message: convert_raygun_message(messaging, &message).await,
+                message,
             }
         }
         MessageEventKind::MessageSent {
@@ -68,16 +57,9 @@ pub async fn convert_message_event(
             let message = messaging.get_message(conversation_id, message_id).await?;
             MessageEvent::Sent {
                 conversation_id,
-                message: convert_raygun_message(messaging, &message).await,
+                message,
             }
         }
-        MessageEventKind::MessageDeleted {
-            conversation_id,
-            message_id,
-        } => MessageEvent::Deleted {
-            conversation_id,
-            message_id,
-        },
         MessageEventKind::MessageReactionAdded {
             conversation_id,
             message_id,
@@ -108,17 +90,8 @@ pub async fn convert_message_event(
                 participant: did_key,
             },
         },
-        MessageEventKind::MessageEdited {
-            conversation_id,
-            message_id,
-        } => {
-            let message = messaging.get_message(conversation_id, message_id).await?;
-            MessageEvent::Edited {
-                conversation_id,
-                message: convert_raygun_message(messaging, &message).await,
-            }
-        }
         _ => {
+            println!("evt received: {event:?}");
             todo!();
         }
     };

@@ -14,14 +14,14 @@ use titlecase::titlecase;
 use uuid::Uuid;
 use warp::{
     constellation::{directory::Directory, file::File},
+    crypto::DID,
     multipass::identity::{Graphics, IdentityStatus, Platform},
     raygun::Message,
 };
 
-use crate::state::{
-    storage::Storage, Account, Chat, Chats, Friends, Identity, Route, Settings, State,
-    ToastNotification,
-};
+use crate::state::{storage::Storage, Chat, Chats, Friends, Identity, State, ToastNotification};
+
+use crate::warp_runner::ui_adapter;
 
 const FRIEND_COUNT: usize = 20;
 
@@ -44,56 +44,57 @@ pub fn generate_mock() -> State {
 
     // all_chats.insert(group_chat.id, group_chat);
 
-    let in_sidebar = vec![];
+    let in_sidebar = VecDeque::new();
     // in_sidebar.push(group_chat_sidebar.id);
-    let mut toast_notifications = HashMap::new();
-    toast_notifications.insert(
-        Uuid::new_v4(),
-        ToastNotification::init("title1".into(), "content1".into(), None, 5),
-    );
-    toast_notifications.insert(
-        Uuid::new_v4(),
-        ToastNotification::init("title2".into(), "content2".into(), None, 10),
-    );
+    // let mut toast_notifications = HashMap::new();
+    // toast_notifications.insert(
+    //     Uuid::new_v4(),
+    //     ToastNotification::init("title1".into(), "content1".into(), None, 5),
+    // );
+    // toast_notifications.insert(
+    //     Uuid::new_v4(),
+    //     ToastNotification::init("title2".into(), "content2".into(), None, 10),
+    // );
     // comment this out to test toast notifications
-    toast_notifications.clear();
+    // toast_notifications.clear();
 
     let storage = generate_fake_storage();
-
-    State {
-        account: Account {
-            identity: me.clone(),
-        },
-        settings: Settings {
-            language: "English (USA)".into(),
-        },
-        route: Route { active: "/".into() },
-        chats: Chats {
-            initialized: true,
-            all: all_chats.clone(),
-            active: None,
-            active_media: None,
-            in_sidebar,
-            favorites: vec![],
-        },
-        storage,
-        friends: Friends {
-            initialized: true,
-            all: identities
-                .into_iter()
-                .map(|id| (id.did_key(), id))
-                .collect(),
-            blocked: HashSet::from_iter(blocked_identities.iter().cloned()),
-            incoming_requests: HashSet::from_iter(incoming_requests.iter().cloned()),
-            outgoing_requests: HashSet::from_iter(outgoing_requests.iter().cloned()),
-        },
-        ..Default::default()
+    let mut id_map: HashMap<DID, Identity> = HashMap::new();
+    for ident in identities.iter().cloned() {
+        id_map.insert(ident.did_key(), ident);
     }
+    for ident in blocked_identities.iter().cloned() {
+        id_map.insert(ident.did_key(), ident);
+    }
+    for ident in incoming_requests.iter().cloned() {
+        id_map.insert(ident.did_key(), ident);
+    }
+    for ident in outgoing_requests.iter().cloned() {
+        id_map.insert(ident.did_key(), ident);
+    }
+
+    let chats = Chats {
+        initialized: true,
+        all: all_chats.clone(),
+        active: None,
+        active_media: None,
+        in_sidebar,
+        favorites: vec![],
+    };
+    let friends = Friends {
+        initialized: true,
+        all: HashSet::from_iter(identities.iter().map(|x| x.did_key())),
+        blocked: HashSet::from_iter(blocked_identities.iter().map(|x| x.did_key())),
+        incoming_requests: HashSet::from_iter(incoming_requests.iter().map(|x| x.did_key())),
+        outgoing_requests: HashSet::from_iter(outgoing_requests.iter().map(|x| x.did_key())),
+    };
+
+    State::mock(me.clone(), id_map, chats, friends, storage)
 }
 
 fn generate_fake_chat(participants: Vec<Identity>, conversation: Uuid) -> Chat {
     let default_id = Identity::default();
-    let mut messages = VecDeque::<Message>::new();
+    let mut messages = VecDeque::<ui_adapter::Message>::new();
 
     let mut rng = rand::thread_rng();
 
@@ -107,12 +108,16 @@ fn generate_fake_chat(participants: Vec<Identity>, conversation: Uuid) -> Chat {
         default_message.set_reactions(vec![]);
         default_message.set_value(vec![lipsum(word_count)]);
 
-        messages.push_back(default_message);
+        messages.push_back(ui_adapter::Message {
+            inner: default_message,
+            in_reply_to: None,
+            key: Uuid::new_v4().to_string(),
+        });
     }
 
     Chat {
         id: conversation,
-        participants,
+        participants: HashSet::from_iter(participants.iter().map(|x| x.did_key())),
         messages,
         unreads: rng.gen_range(0..2),
         replying_to: None,
@@ -212,7 +217,7 @@ fn generate_random_identities(count: usize) -> Vec<Identity> {
     identities
 }
 
-fn generate_fake_message(conversation_id: Uuid, identities: &[Identity]) -> Message {
+fn generate_fake_message(conversation_id: Uuid, identities: &[Identity]) -> ui_adapter::Message {
     let lorem_ipsum = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.";
     let reactions = ["❤️", "😂", "😍", "💯", "👍", "😮", "😢", "😡", "🤔", "😎"];
 
@@ -247,7 +252,11 @@ fn generate_fake_message(conversation_id: Uuid, identities: &[Identity]) -> Mess
     default_message.set_replied(None);
     default_message.set_value(vec![text.into()]);
 
-    default_message
+    ui_adapter::Message {
+        inner: default_message,
+        in_reply_to: None,
+        key: Uuid::new_v4().to_string(),
+    }
 }
 
 fn generate_fake_storage() -> Storage {
