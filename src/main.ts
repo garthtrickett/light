@@ -1,4 +1,4 @@
-/* @refresh reload */
+//* @refresh reload */
 
 import { invoke } from "https://esm.sh/@tauri-apps/api";
 import {
@@ -16,11 +16,16 @@ var view = "";
 import copy from 'copy-to-clipboard';
 
 
+// listen backend-ping event
+listen("test-event", function(blah: TauriEvent<any>) {
+  alert(blah);
+});
 
 // listen backend-ping event
-listen("warp-event", function(evt: TauriEvent<any>) {
-  load_from_state(evt.payload, view);
+listen("warp-event", function(state: TauriEvent<any>) {
+  load_from_state(state.payload, view);
 });
+
 
 function state_tuple_to_array(state_tuple) {
   const state_keys = [
@@ -41,10 +46,17 @@ function state_tuple_to_array(state_tuple) {
 
 let promise_start_sam = invoke("start_sam_command");
 promise_start_sam.then(function(result) {
+  console.log("blah");
+  console.log(JSON.stringify(result));
+  console.log("blah");
+  result.logged_in = false;
+
+  load_from_state(result, view);
 });
 
 let promise_check_for_identity = invoke("check_for_identity_command");
 promise_check_for_identity.then(function(result) {
+  result.logged_in = false;
   load_from_state(result, view);
 });
 

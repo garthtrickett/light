@@ -7,14 +7,16 @@
     "withGlobalTauri": true
   },
   "package": {
-    "productName": "tauri-node-blank",
+    "productName": "light",
     "version": "0.0.0"
   },
   "tauri": {
     "allowlist": {
       "fs": {
         "all": true,
-        "scope": ["$LOCALDATA/*"]
+        "scope": [
+          "$LOCALDATA/*"
+        ]
       },
       "dialog": {
         "all": true,

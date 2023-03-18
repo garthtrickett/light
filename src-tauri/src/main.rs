@@ -3,6 +3,8 @@
     windows_subsystem = "windows"
 )]
 
+use std::any::type_name;
+
 use crate::warp_runner::ui_adapter::ChatAdapter;
 use crossbeam::channel;
 use std::collections::HashSet;
@@ -276,7 +278,6 @@ impl State {
                 let outcome_two =
                     send_message(string_val_two.unwrap(), outcome.unwrap().inner.id).await;
 
-                println!("OUTCOME TWO: {:?}", outcome_two);
                 // tx.send(outcome).unwrap();
 
                 // string_val_two == message
@@ -339,43 +340,24 @@ fn next_action(model: state::State) -> state::State {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() {
-    println!("WE GOT THERE");
     if fdlimit::raise_fd_limit().is_none() {}
     std::fs::create_dir_all(STATIC_ARGS.light_path.clone())
         .expect("Error creating Uplink directory");
     std::fs::create_dir_all(STATIC_ARGS.warp_path.clone()).expect("Error creating Warp directory");
 
     let state = Arc::new(Mutex::new(Some(state::State::load())));
+    // println!("initial_state {:?}", state);
 
-    let handle_warp_runner = || {
-        let handle = Handle::current();
-        handle.spawn(async move {
-            let mut warp_instance = warp_runner::WarpRunner::new();
-            warp_instance.run();
-        });
-    };
-    let state_clone = state.clone();
-    // // Accept friend request
+    // let state_clone = state.clone();
 
-    // let (tx, rx) = oneshot::channel::<Result<(), warp::error::Error>>();
-    // let did_key_value = "did:key:z6Mkr1MTwGWHzspJUnPKMP5v444hofbwLD9Hwa48Lzi4CLEC";
+    // let handle_warp_runner = || {
+    //     let handle = Handle::current();
+    //     handle.spawn(async move {
+    //         let mut warp_instance = warp_runner::WarpRunner::new();
+    //         warp_instance.run();
+    //     });
+    // };
 
-    // warp_cmd_tx
-    //     .send(WarpCmd::MultiPass(MultiPassCmd::AcceptRequest {
-    //         did: DID::from_str(&did_key_value).unwrap(),
-    //         rsp: tx,
-    //     }))
-    //     .expect("UnlockLayout failed to send warp command");
-
-    // let res = rx.await.expect("failed to get response from warp_runner");
-
-    // match res {
-    //     Ok(_) => {
-    //         println!("Friend accept successful.")
-    //     }
-    //     // todo: notify user
-    //     Err(e) => (println!("Failed with error: {:?}", e)),
-    // }
     tauri::Builder::default()
         .setup(move |app| {
             #[cfg(debug_assertions)] // only include this code on debug builds
@@ -383,35 +365,32 @@ async fn main() {
                 let window = app.get_window("main").unwrap();
                 window.open_devtools();
             }
-            let app_handle = app.app_handle();
+            // let app_handle = app.app_handle();
 
-            app_handle.run_on_main_thread(handle_warp_runner);
+            // app_handle.run_on_main_thread(handle_warp_runner);
 
-            let app_handle_ref = app.app_handle();
-            let handle_warp_events = || {
-                let handle = Handle::current();
-                let state = state_clone;
+            // let app_handle_ref = app.app_handle();
+            // let handle_warp_events = move || {
+            //     let handle = Handle::current();
+            //     let state = state_clone;
 
-                handle.spawn(async move {
-                    let inside_loop_state_clone = state.clone();
-                    let mut ch = WARP_EVENT_CH.rx.lock().await;
-                    while let Some(evt) = ch.recv().await {
-                        println!("in-BULLFROG");
-                        state
-                            .lock()
-                            .unwrap()
-                            .as_mut()
-                            .unwrap()
-                            .process_warp_event(evt);
+            //     handle.spawn(async move {
+            //         let mut ch = WARP_EVENT_CH.rx.lock().await;
+            //         while let Some(evt) = ch.recv().await {
+            //             println!("in-BULLFROG");
+            //             state
+            //                 .lock()
+            //                 .unwrap()
+            //                 .as_mut()
+            //                 .unwrap()
+            //                 .process_warp_event(evt);
 
-                        app_handle_ref
-                            .emit_all("warp-event", inside_loop_state_clone.clone())
-                            .unwrap();
-                    }
-                });
-            };
+            //             app_handle_ref.emit_all("warp-event", &state).unwrap();
+            //         }
+            //     });
+            // };
 
-            app_handle.run_on_main_thread(handle_warp_events);
+            // app_handle.run_on_main_thread(handle_warp_events);
 
             Ok(())
         })
@@ -527,7 +506,6 @@ async fn create_conversation(did_key: String) -> Result<ChatAdapter, warp::error
 }
 
 async fn send_message(message: String, conv_id: Uuid) -> Result<(), warp::error::Error> {
-    println!("got to here before breaking");
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
     let (tx, rx) = oneshot::channel::<Result<(), warp::error::Error>>();
     let vec_string_message: Vec<String> =
@@ -670,6 +648,8 @@ fn login_command(password: String, state: tauri::State<StateState>) -> state::St
     let mut state_guard = state.0.lock().unwrap();
     let model_clone = model.clone();
     *state_guard = Some(model);
+    println!("model_clone: {:?}", model_clone);
+
     return model_clone;
 }
 

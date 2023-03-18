@@ -87,7 +87,7 @@ impl fmt::Debug for State {
 // todo: why is there clone impl which returns a mutated value?
 impl Clone for State {
     fn clone(&self) -> Self {
-        State {
+        let state = State {
             id: self.did_key(),
             route: self.route.clone(),
             chats: self.chats.clone(),
@@ -100,7 +100,8 @@ impl Clone for State {
             counter: self.counter.clone(),
             logged_in: self.logged_in.clone(),
             identity_exists: self.identity_exists.clone(),
-        }
+        };
+        state
     }
 }
 
@@ -109,12 +110,6 @@ impl Clone for State {
 //  These methods are used to update the relevant fields within the State struct in response to user actions or other events within the application.
 impl State {
     /// Constructs a new `State` instance with default values.
-    /// use state::load() instead
-    #[deprecated]
-    pub fn new() -> Self {
-        State::default()
-    }
-
     pub fn mutate(&mut self, action: Action) {
         log::debug!("state::mutate: {}", action);
 
@@ -490,6 +485,7 @@ impl State {
             Ok(r) => r,
             Err(_) => {
                 log::info!("state.json not found. Initializing State with default values");
+                println!("state.json not found. Initializing State with default values");
                 return State::default();
             }
         };
