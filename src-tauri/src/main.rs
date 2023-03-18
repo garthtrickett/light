@@ -544,6 +544,8 @@ fn start_sam_command(state: tauri::State<StateState>) -> state::State {
     let model_clone = model.clone();
     *state_guard = Some(model);
 
+    println!("start_sam_model_clone {:?}", model_clone);
+
     return model_clone;
 }
 #[named]
