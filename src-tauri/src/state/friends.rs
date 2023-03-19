@@ -8,18 +8,16 @@ use crate::STATIC_ARGS;
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Friends {
     // becomes true when the friends fields have been retrieved from Warp
-    #[serde(skip)]
+    // #[serde(skip)]
     pub initialized: bool,
     // All active friends.
-    #[serde(default)]
+    // #[serde(default)]
     pub all: HashSet<DID>,
     // List of friends the user has blocked
-    #[serde(default)]
     pub blocked: HashSet<DID>,
     // Friend requests, incoming and outgoing.
-    #[serde(default)]
+    // #[serde(default)]
     pub incoming_requests: HashSet<DID>,
-    #[serde(default)]
     pub outgoing_requests: HashSet<DID>,
 }
 
@@ -37,11 +35,11 @@ impl Serialize for Friends {
             state.serialize_field("incoming_requests", &self.incoming_requests)?;
             state.serialize_field("outgoing_requests", &self.outgoing_requests)?;
         } else {
-            state.skip_field("initialized")?;
-            state.skip_field("all")?;
-            state.skip_field("blocked")?;
-            state.skip_field("incoming_requests")?;
-            state.skip_field("outgoing_requests")?;
+            state.serialize_field("initialized", &self.initialized)?;
+            state.serialize_field("all", &self.all)?;
+            state.serialize_field("blocked", &self.blocked)?;
+            state.serialize_field("incoming_requests", &self.incoming_requests)?;
+            state.serialize_field("outgoing_requests", &self.outgoing_requests)?;
         };
 
         state.end()

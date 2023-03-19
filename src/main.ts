@@ -120,6 +120,8 @@ function friends_list_from_state(state, friend_type) {
   const friend_list = [];
   for (const friend in state["friends"][friend_type]) {
     friends_exist = true;
+    let friend_values = state["friends"][friend_type][friend];
+    alert(friend_values);
 
     if (friend_type == "all") {
       var button = html`<md-filled-button
@@ -136,9 +138,9 @@ function friends_list_from_state(state, friend_type) {
       var button = html``;
     }
 
-    let friend_values = state["friends"][friend_type][friend];
+    // ${friend_values["identity"]["username"]} // this was down in the html
     friend_list.push(
-      html`<li> ${friend_values["identity"]["username"]}   
+      html`<li> 
             ${button}
            </li>`,
     );

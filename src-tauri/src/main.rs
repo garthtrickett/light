@@ -430,6 +430,7 @@ async fn initialize_conversations() -> HashMap<Uuid, Chat> {
     };
     println!("initialize conversations successsful");
     res.unwrap().0
+    // FIX HERE SO WE ALSO USE HashSet<state::identity::Identit
 }
 
 async fn initialize_friends() -> state::friends::Friends {
@@ -447,6 +448,7 @@ async fn initialize_friends() -> state::friends::Friends {
     let res = rx.await.expect("failed to get response from warp_runner");
     let friends = res.expect("Something broke");
     friends.0
+    // FIX HERE SO WE ALSO USE friends.1
 }
 
 async fn initialize_files() -> state::storage::Storage {
