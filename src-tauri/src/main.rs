@@ -346,17 +346,16 @@ async fn main() {
     std::fs::create_dir_all(STATIC_ARGS.warp_path.clone()).expect("Error creating Warp directory");
 
     let state = Arc::new(Mutex::new(Some(state::State::load())));
-    // println!("initial_state {:?}", state);
 
-    // let state_clone = state.clone();
+    let state_clone = state.clone();
 
-    // let handle_warp_runner = || {
-    //     let handle = Handle::current();
-    //     handle.spawn(async move {
-    //         let mut warp_instance = warp_runner::WarpRunner::new();
-    //         warp_instance.run();
-    //     });
-    // };
+    let handle_warp_runner = || {
+        let handle = Handle::current();
+        handle.spawn(async move {
+            let mut warp_instance = warp_runner::WarpRunner::new();
+            warp_instance.run();
+        });
+    };
 
     tauri::Builder::default()
         .setup(move |app| {
@@ -365,32 +364,32 @@ async fn main() {
                 let window = app.get_window("main").unwrap();
                 window.open_devtools();
             }
-            // let app_handle = app.app_handle();
+            let app_handle = app.app_handle();
 
-            // app_handle.run_on_main_thread(handle_warp_runner);
+            app_handle.run_on_main_thread(handle_warp_runner);
 
-            // let app_handle_ref = app.app_handle();
-            // let handle_warp_events = move || {
-            //     let handle = Handle::current();
-            //     let state = state_clone;
+            let app_handle_ref = app.app_handle();
+            let handle_warp_events = move || {
+                let handle = Handle::current();
+                let state = state_clone;
 
-            //     handle.spawn(async move {
-            //         let mut ch = WARP_EVENT_CH.rx.lock().await;
-            //         while let Some(evt) = ch.recv().await {
-            //             println!("in-BULLFROG");
-            //             state
-            //                 .lock()
-            //                 .unwrap()
-            //                 .as_mut()
-            //                 .unwrap()
-            //                 .process_warp_event(evt);
+                handle.spawn(async move {
+                    let mut ch = WARP_EVENT_CH.rx.lock().await;
+                    while let Some(evt) = ch.recv().await {
+                        println!("in-BULLFROG");
+                        state
+                            .lock()
+                            .unwrap()
+                            .as_mut()
+                            .unwrap()
+                            .process_warp_event(evt);
 
-            //             app_handle_ref.emit_all("warp-event", &state).unwrap();
-            //         }
-            //     });
-            // };
+                        app_handle_ref.emit_all("warp-event", &state).unwrap();
+                    }
+                });
+            };
 
-            // app_handle.run_on_main_thread(handle_warp_events);
+            app_handle.run_on_main_thread(handle_warp_events);
 
             Ok(())
         })
@@ -544,10 +543,17 @@ fn start_sam_command(state: tauri::State<StateState>) -> state::State {
     let model_clone = model.clone();
     *state_guard = Some(model);
 
-    println!("start_sam_model_clone {:?}", model_clone);
-
     return model_clone;
+    // let state_tuple = (
+    //     model_clone.clone().id,
+    //     model_clone.clone().route,
+    //     model_clone.clone().chats,
+    //     model_clone.clone().friends,
+    // );
+
+    // state_tuple
 }
+
 #[named]
 #[tauri::command]
 fn check_for_identity_command(state: tauri::State<StateState>) -> state::State {
@@ -650,7 +656,7 @@ fn login_command(password: String, state: tauri::State<StateState>) -> state::St
     let mut state_guard = state.0.lock().unwrap();
     let model_clone = model.clone();
     *state_guard = Some(model);
-    println!("model_clone: {:?}", model_clone);
+    println!("state after logging in: {:?}", model_clone);
 
     return model_clone;
 }

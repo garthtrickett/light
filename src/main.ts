@@ -27,28 +27,10 @@ listen("warp-event", function(state: TauriEvent<any>) {
 });
 
 
-function state_tuple_to_array(state_tuple) {
-  const state_keys = [
-    "account",
-    "chats",
-    "configuration",
-    "counter",
-    "friends",
-    "identity_exists",
-    "logged_in",
-  ];
-  const state_object = state_keys.reduce(
-    (obj, key, index) => ({ ...obj, [key]: state_tuple[index] }),
-    {},
-  );
-  return state_object;
-}
 
 let promise_start_sam = invoke("start_sam_command");
 promise_start_sam.then(function(result) {
-  console.log("blah");
-  console.log(JSON.stringify(result));
-  console.log("blah");
+
   result.logged_in = false;
 
   load_from_state(result, view);
@@ -60,13 +42,6 @@ promise_check_for_identity.then(function(result) {
   load_from_state(result, view);
 });
 
-// let promise_increment_counter = invoke("increment_counter_command", {
-//   step: 1,
-// });
-
-// promise_increment_counter.then(function (result) {
-//   load_from_state(result);
-// });
 
 function get_own_did_key() {
   let promise_start_sam = invoke("get_own_did_key_command");
@@ -81,6 +56,10 @@ function send_login_request(password) {
     password: password,
   });
   promise_try_login.then(function(result) {
+
+    console.log("blah");
+    console.log(JSON.stringify(result));
+    console.log("blah");
     load_from_state(result, view);
   });
 }

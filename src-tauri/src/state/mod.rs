@@ -17,7 +17,6 @@ use dioxus_desktop::tao::window::WindowId;
 pub use friends::Friends;
 pub use identity::Identity;
 pub use route::Route;
-// pub use settings::Settings;
 pub use ui::{Theme, ToastNotification, UI};
 use warp::multipass::identity::Platform;
 
@@ -53,33 +52,28 @@ use self::ui::Call;
 // the HashSet would be used to determine when to evict an identity. (they are not participating in any conversations and are not a friend)
 #[derive(Default, Deserialize, Serialize)]
 pub struct State {
-    #[serde(default)]
-    pub identity_exists: bool,
-    #[serde(default)]
-    pub counter: i32,
-    #[serde(default)]
-    pub logged_in: bool,
-    #[serde(skip)]
-    id: DID,
-    pub route: route::Route,
-    pub chats: chats::Chats,
+    pub id: DID,
     pub friends: friends::Friends,
-    #[serde(skip)]
+    pub chats: chats::Chats,
+    pub route: route::Route,
     pub storage: storage::Storage,
-    // pub settings: settings::Settings,
     pub ui: ui::UI,
     pub configuration: configuration::Configuration,
-    #[serde(skip)]
-    identities: HashMap<DID, identity::Identity>,
+    pub identity_exists: bool,
+    pub counter: i32,
+    pub logged_in: bool,
+    pub identities: HashMap<DID, identity::Identity>,
 }
 
 impl fmt::Debug for State {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("State")
             .field("id", &self.did_key())
-            .field("route", &self.route)
-            .field("chats", &self.chats)
             .field("friends", &self.friends)
+            .field("chats", &self.chats)
+            .field("route", &self.route)
+            .field("logged_in", &self.logged_in)
+            .field("identity_exists", &self.identity_exists)
             .finish()
     }
 }
@@ -89,12 +83,11 @@ impl Clone for State {
     fn clone(&self) -> Self {
         let state = State {
             id: self.did_key(),
-            route: self.route.clone(),
-            chats: self.chats.clone(),
             friends: self.friends.clone(),
-            storage: self.storage.clone(),
-            // settings: Default::default(),
+            chats: self.chats.clone(),
             ui: Default::default(),
+            route: self.route.clone(),
+            storage: self.storage.clone(),
             configuration: self.configuration.clone(),
             identities: HashMap::new(),
             counter: self.counter.clone(),
@@ -225,7 +218,6 @@ impl State {
     pub fn clear(&mut self) {
         self.chats = chats::Chats::default();
         self.friends = friends::Friends::default();
-        // self.settings = settings::Settings::default();
     }
 
     pub fn process_warp_event(&mut self, event: WarpEvent) {
@@ -486,6 +478,7 @@ impl State {
             Err(_) => {
                 log::info!("state.json not found. Initializing State with default values");
                 println!("state.json not found. Initializing State with default values");
+
                 return State::default();
             }
         };
