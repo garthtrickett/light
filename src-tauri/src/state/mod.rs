@@ -89,7 +89,7 @@ impl Clone for State {
             route: self.route.clone(),
             storage: self.storage.clone(),
             configuration: self.configuration.clone(),
-            identities: HashMap::new(),
+            identities: self.identities.clone(),
             counter: self.counter.clone(),
             logged_in: self.logged_in.clone(),
             identity_exists: self.identity_exists.clone(),

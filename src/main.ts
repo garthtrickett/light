@@ -16,10 +16,6 @@ var view = "";
 import copy from 'copy-to-clipboard';
 
 
-// listen backend-ping event
-listen("test-event", function(blah: TauriEvent<any>) {
-  alert(blah);
-});
 
 // listen backend-ping event
 listen("warp-event", function(state: TauriEvent<any>) {
@@ -57,9 +53,7 @@ function send_login_request(password) {
   });
   promise_try_login.then(function(result) {
 
-    console.log("blah");
-    console.log(JSON.stringify(result));
-    console.log("blah");
+    // console.log(JSON.stringify(result["chats"]));
     load_from_state(result, view);
   });
 }
@@ -83,7 +77,6 @@ function send_message(conv_id, message) {
 }
 
 function send_initial_message(did_key, message) {
-  console.log("did_key: " + did_key);
   let promise = invoke("send_initial_message_command", {
     didKey: did_key,
     message: message,
@@ -120,27 +113,26 @@ function friends_list_from_state(state, friend_type) {
   const friend_list = [];
   for (const friend in state["friends"][friend_type]) {
     friends_exist = true;
-    let friend_values = state["friends"][friend_type][friend];
-    alert(friend_values);
+    let friend_did_key = state["friends"][friend_type][friend];
 
     if (friend_type == "all") {
       var button = html`<md-filled-button
                     label="Chat"
-                    @click=${() => set_view_to_individual_chat(friend, state)}>
+                    @click=${() => set_view_to_individual_chat(friend_did_key, state)}>
               />`;
     } else if (friend_type == "incoming_requests") {
       var button = html`<md-filled-button
                     label="Accept Request"
                     @click=${() =>
-          send_friend_request(friend_values["identity"]["did_key"])}>
+          send_friend_request(friend_did_key)}>
               />`;
     } else {
       var button = html``;
     }
 
-    // ${friend_values["identity"]["username"]} // this was down in the html
     friend_list.push(
       html`<li> 
+    ${state["identities"][friend_did_key]["identity"]["username"]} 
             ${button}
            </li>`,
     );
@@ -148,7 +140,6 @@ function friends_list_from_state(state, friend_type) {
   return { friend_list, friends_exist };
 }
 
-// TODO - ability to send and recieve messages from within an individual chat
 
 function load_from_state(state, view) {
   if (state["identity_exists"] == true) {
@@ -220,13 +211,15 @@ function load_from_state(state, view) {
       } else {
         var all_chats = state["chats"]["all"];
 
+
+        // alert(JSON.stringify(all_chats));
+
         var chat_with_this_did_key_exists = false;
 
         var num_chats = Object.keys(all_chats).length;
         for (let i = 0; i < num_chats; i++) {
           var nth_key = Object.keys(all_chats)[i];
-          var nth_chat_did_key =
-            all_chats[nth_key]["participants"][1]["identity"]["did_key"];
+          var nth_chat_did_key = Object.values(all_chats)[i]["participants"][1];
           if (view == nth_chat_did_key) {
             var chat_with_this_did_key_exists = true;
             var chat = all_chats[nth_key];
@@ -239,22 +232,19 @@ function load_from_state(state, view) {
             load_from_state(state, "")}>
                                   />`;
         if (chat_with_this_did_key_exists == true) {
-          // TODO - put in a way to send messages after initial message
-          //      - make incoming and outgoing messasges readable here
-          var chat_participants = {};
 
-          for (const participants of chat["participants"]) {
-            chat_participants[participants["identity"]["did_key"]] =
-              participants["identity"]["username"];
-          }
+          // alert(JSON.stringify(state["identities"]));
+
+
+
+
 
           var authed_div = html`<div>
           
                                   ${back_button}
           
       ${map(chat["messages"], (message) =>
-            html`<div>${chat_participants[message["sender"]]}: ${message["value"]["0"]
-              }</div>`)
+            html`<div>${state["identities"][Object.values(message)[1]["sender"]]["identity"]["username"]}: ${Object.values(message)[1]["value"]}</div>`)
             }
                              <md-filled-text-field
                               @change=${(e) => {

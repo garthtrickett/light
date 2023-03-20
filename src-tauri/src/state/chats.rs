@@ -9,18 +9,6 @@ use warp::{crypto::DID, raygun};
 
 use crate::{warp_runner::ui_adapter, STATIC_ARGS};
 
-// let (p = window_bottom) be an index into Chat.messages
-// show messages from (p - window_size) to (p + window_extra)
-// scroll up by window_extra (this allows an onmouseout event to trigger)
-// pub struct ChatView {
-//     // the idx of the message on the bottom of the screen
-//     message_idx: usize,
-//     // the number of messages to render in the window
-//     window_size: usize,
-//     // the number of messages to add outside the window, for scrolling purposes
-//     window_extra: usize,
-// }
-
 // warning: Chat implements Serialize
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Chat {
@@ -33,7 +21,6 @@ pub struct Chat {
     // Messages should only contain messages we want to render. Do not include the entire message history.
     // don't store the actual message in state
     // warn: Chat has a custom serialize method which skips this field when not using mock data.
-    #[serde(default)]
     pub messages: VecDeque<ui_adapter::Message>,
     // Unread count for this chat, should be cleared when we view the chat.
     pub unreads: u32,
@@ -123,7 +110,7 @@ impl Serialize for Chat {
         if STATIC_ARGS.use_mock {
             state.serialize_field("messages", &self.messages)?;
         } else {
-            state.skip_field("messages")?;
+            state.serialize_field("messages", &self.messages)?;
         }
 
         state.serialize_field("unreads", &self.unreads)?;

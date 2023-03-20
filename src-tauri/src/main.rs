@@ -164,10 +164,10 @@ impl State {
 
             let (tx, rx): (Sender<bool>, Receiver<bool>) = channel();
             let (tx2, rx2): (
-                Sender<state::friends::Friends>,
-                Receiver<state::friends::Friends>,
+                Sender<(state::friends::Friends, HashSet<state::identity::Identity>)>,
+                Receiver<(state::friends::Friends, HashSet<state::identity::Identity>)>,
             ) = channel();
-            let (tx3, rx3): (Sender<HashMap<Uuid, Chat>>, Receiver<HashMap<Uuid, Chat>>) =
+            let (tx3, rx3): (Sender<(HashMap<Uuid, state::Chat>, HashSet<state::Identity>)>, Receiver<(HashMap<Uuid, state::Chat>, HashSet<state::Identity>)>) =
                 channel();
             let (tx4, rx4): (
                 Sender<state::storage::Storage>,
@@ -180,14 +180,14 @@ impl State {
                 match res {
                     Ok(_) => {
                         if res.as_ref().unwrap() == &true {
-                            let friends = initialize_friends().await;
+                            let friends_tuple = initialize_friends().await;
                             let conversations_tuple = initialize_conversations().await;
                             let storage = initialize_files().await;
 
                             //      - think about passing the whole state struct to the front end ? json, deserialize needed serde ??
 
                             tx.send(res.unwrap()).unwrap();
-                            tx2.send(friends).unwrap();
+                            tx2.send(friends_tuple).unwrap();
                             tx3.send(conversations_tuple).unwrap();
                             tx4.send(storage).unwrap();
                         }
@@ -211,20 +211,18 @@ impl State {
                 }
             }
 
-            let friends = rx2.recv().unwrap();
-            self.friends = friends;
+            let friends_tuple = rx2.recv().unwrap();
+
+            self.set_friends(friends_tuple.0, friends_tuple.1);
+
 
             let conversations_tuple = rx3.recv().unwrap();
-            let mut all_chats = conversations_tuple;
-            for (k, v) in self.chats.all {
-                // the # of unread chats defaults to the length of the conversation. but this number
-                // is stored in state
-                if let Some(chat) = all_chats.get_mut(&k) {
-                    chat.unreads = v.unreads;
-                }
-            }
+            // println!("conversation_tuple: {:?}", conversations_tuple.0);
 
-            self.chats.all = all_chats;
+            self.set_chats(conversations_tuple.0, conversations_tuple.1);
+
+
+            
             self.chats.initialized = true;
             let storage = rx4.recv().unwrap();
             self.storage = storage;
@@ -410,7 +408,7 @@ async fn main() {
         .expect("error while running tauri application");
 }
 
-async fn initialize_conversations() -> HashMap<Uuid, Chat> {
+async fn initialize_conversations() -> (HashMap<Uuid, Chat>, HashSet<state::identity::Identity>) {
     // Initialise conversations
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
     let res = loop {
@@ -428,12 +426,11 @@ async fn initialize_conversations() -> HashMap<Uuid, Chat> {
             Err(_e) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
         }
     };
-    println!("initialize conversations successsful");
-    res.unwrap().0
-    // FIX HERE SO WE ALSO USE HashSet<state::identity::Identit
+    let conversation_tuple = res.unwrap();
+    (conversation_tuple.0, conversation_tuple.1)
 }
 
-async fn initialize_friends() -> state::friends::Friends {
+async fn initialize_friends() -> (state::friends::Friends, HashSet<state::identity::Identity>){
     // Initialize friends
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
     let (tx, rx) = oneshot::channel::<
@@ -447,7 +444,7 @@ async fn initialize_friends() -> state::friends::Friends {
 
     let res = rx.await.expect("failed to get response from warp_runner");
     let friends = res.expect("Something broke");
-    friends.0
+    (friends.0, friends.1)
     // FIX HERE SO WE ALSO USE friends.1
 }
 
@@ -657,8 +654,8 @@ fn login_command(password: String, state: tauri::State<StateState>) -> state::St
 
     let mut state_guard = state.0.lock().unwrap();
     let model_clone = model.clone();
+    println!("chats after logging in: {:?}", model_clone.chats);
     *state_guard = Some(model);
-    println!("state after logging in: {:?}", model_clone);
 
     return model_clone;
 }
