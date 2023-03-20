@@ -167,8 +167,10 @@ impl State {
                 Sender<(state::friends::Friends, HashSet<state::identity::Identity>)>,
                 Receiver<(state::friends::Friends, HashSet<state::identity::Identity>)>,
             ) = channel();
-            let (tx3, rx3): (Sender<(HashMap<Uuid, state::Chat>, HashSet<state::Identity>)>, Receiver<(HashMap<Uuid, state::Chat>, HashSet<state::Identity>)>) =
-                channel();
+            let (tx3, rx3): (
+                Sender<(HashMap<Uuid, state::Chat>, HashSet<state::Identity>)>,
+                Receiver<(HashMap<Uuid, state::Chat>, HashSet<state::Identity>)>,
+            ) = channel();
             let (tx4, rx4): (
                 Sender<state::storage::Storage>,
                 Receiver<state::storage::Storage>,
@@ -215,14 +217,10 @@ impl State {
 
             self.set_friends(friends_tuple.0, friends_tuple.1);
 
-
             let conversations_tuple = rx3.recv().unwrap();
-            // println!("conversation_tuple: {:?}", conversations_tuple.0);
 
             self.set_chats(conversations_tuple.0, conversations_tuple.1);
 
-
-            
             self.chats.initialized = true;
             let storage = rx4.recv().unwrap();
             self.storage = storage;
@@ -268,10 +266,7 @@ impl State {
             handle.spawn(async move {
                 // string_val_one == did_key
                 let outcome = create_conversation(string_val_one.unwrap()).await;
-                // println!("OUTCOME: {:?}", outcome.unwrap().id);
                 println!("out-BULLFROG");
-                // println!("string_val_two{:?}", string_val_two.unwrap());
-                // println!("outcome{:?}", outcome.unwrap());
                 // string_val_two == message
                 let outcome_two =
                     send_message(string_val_two.unwrap(), outcome.unwrap().inner.id).await;
@@ -291,17 +286,8 @@ impl State {
                 // string_val_two == conv_id
                 let conv_id_uuid = Uuid::parse_str(&string_val_two.unwrap());
                 let message = string_val_one.unwrap();
-                // println!("{:?}", message);
-                // println!("{:?}", conv_id_uuid.unwrap());
 
                 let outcome_two = send_message(message, conv_id_uuid.unwrap()).await;
-
-                // println!("OUTCOME TWO: {:?}", outcome_two);
-                // tx.send(outcome).unwrap();
-
-                // string_val_two == message
-                // let outcome_two = send_friend_request(string_val_two.unwrap()).await;
-                // tx2.send(outcome_two).unwrap();
             });
         }
 
@@ -430,7 +416,7 @@ async fn initialize_conversations() -> (HashMap<Uuid, Chat>, HashSet<state::iden
     (conversation_tuple.0, conversation_tuple.1)
 }
 
-async fn initialize_friends() -> (state::friends::Friends, HashSet<state::identity::Identity>){
+async fn initialize_friends() -> (state::friends::Friends, HashSet<state::identity::Identity>) {
     // Initialize friends
     let warp_cmd_tx = WARP_CMD_CH.tx.clone();
     let (tx, rx) = oneshot::channel::<
@@ -543,14 +529,6 @@ fn start_sam_command(state: tauri::State<StateState>) -> state::State {
     *state_guard = Some(model);
 
     return model_clone;
-    // let state_tuple = (
-    //     model_clone.clone().id,
-    //     model_clone.clone().route,
-    //     model_clone.clone().chats,
-    //     model_clone.clone().friends,
-    // );
-
-    // state_tuple
 }
 
 #[named]
@@ -654,8 +632,9 @@ fn login_command(password: String, state: tauri::State<StateState>) -> state::St
 
     let mut state_guard = state.0.lock().unwrap();
     let model_clone = model.clone();
-    println!("chats after logging in: {:?}", model_clone.chats);
     *state_guard = Some(model);
+
+    println!("Model after loggin in {:?}", model_clone);
 
     return model_clone;
 }

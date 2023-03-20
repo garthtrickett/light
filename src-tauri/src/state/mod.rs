@@ -469,17 +469,15 @@ impl State {
     }
     /// Loads the state from a file on disk, if it exists.
     pub fn load() -> Self {
-        if STATIC_ARGS.use_mock {
-            return State::load_mock();
-        };
-
         let contents = match fs::read_to_string(&STATIC_ARGS.cache_path) {
             Ok(r) => r,
             Err(_) => {
                 log::info!("state.json not found. Initializing State with default values");
                 println!("state.json not found. Initializing State with default values");
 
-                return State::default();
+                let mut state_default = State::default();
+                state_default.logged_in = false;
+                return state_default;
             }
         };
         let mut state: Self = match serde_json::from_str(&contents) {
@@ -488,11 +486,14 @@ impl State {
                 log::error!(
                     "state.json failed to deserialize: {e}. Initializing State with default values"
                 );
-                return State::default();
+                let mut state_default = State::default();
+                state_default.logged_in = false;
+                return state_default;
             }
         };
         // not sure how these defaulted to true, but this should serve as additional
         // protection in the future
+        state.logged_in = false;
         state.friends.initialized = false;
         state.chats.initialized = false;
         state

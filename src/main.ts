@@ -15,8 +15,6 @@ var view = "";
 
 import copy from 'copy-to-clipboard';
 
-
-
 // listen backend-ping event
 listen("warp-event", function(state: TauriEvent<any>) {
   load_from_state(state.payload, view);
@@ -27,6 +25,7 @@ listen("warp-event", function(state: TauriEvent<any>) {
 let promise_start_sam = invoke("start_sam_command");
 promise_start_sam.then(function(result) {
 
+
   result.logged_in = false;
 
   load_from_state(result, view);
@@ -34,7 +33,6 @@ promise_start_sam.then(function(result) {
 
 let promise_check_for_identity = invoke("check_for_identity_command");
 promise_check_for_identity.then(function(result) {
-  result.logged_in = false;
   load_from_state(result, view);
 });
 
@@ -42,8 +40,9 @@ promise_check_for_identity.then(function(result) {
 function get_own_did_key() {
   let promise_start_sam = invoke("get_own_did_key_command");
   promise_start_sam.then(function(result) {
-    // navigator.clipboard.writeText(result);
     copy(result);
+
+
   });
 }
 
@@ -219,7 +218,22 @@ function load_from_state(state, view) {
         var num_chats = Object.keys(all_chats).length;
         for (let i = 0; i < num_chats; i++) {
           var nth_key = Object.keys(all_chats)[i];
+
+
           var nth_chat_did_key = Object.values(all_chats)[i]["participants"][1];
+
+          let did_key_in_friends = false;
+          for (const friend of state["friends"]["all"]) {
+            if (friend == nth_chat_did_key) {
+              did_key_in_friends = true
+            }
+          }
+
+
+          if (did_key_in_friends == false) {
+            var nth_chat_did_key = Object.values(all_chats)[i]["participants"][0];
+
+          }
           if (view == nth_chat_did_key) {
             var chat_with_this_did_key_exists = true;
             var chat = all_chats[nth_key];
@@ -232,8 +246,8 @@ function load_from_state(state, view) {
             load_from_state(state, "")}>
                                   />`;
         if (chat_with_this_did_key_exists == true) {
+          alert("got here");
 
-          // alert(JSON.stringify(state["identities"]));
 
 
 
