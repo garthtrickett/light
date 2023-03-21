@@ -2,5 +2,5 @@
 
 
 # Get started
-#3 npm install
+## npm install
 ## npm run tauri dev
